@@ -32,7 +32,9 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
 
 import java.io.Serializable;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.GenericArrayType;
+import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
@@ -266,6 +268,13 @@ public abstract class TypeToken<T> extends TypeCapture<T> implements Serializabl
     return of(resolver.resolveType(type));
   }
 
+  private Type[] resolveInPlace(Type[] types) {
+    for (int i = 0; i < types.length; i++) {
+      types[i] = resolveType(types[i]).getType();
+    }
+    return types;
+  }
+
   private TypeToken<?> resolveSupertype(Type type) {
     TypeToken<?> supertype = resolveType(type);
     // super types' type mapping is a subset of type mapping of this type.
@@ -448,6 +457,54 @@ public abstract class TypeToken<T> extends TypeCapture<T> implements Serializabl
   }
 
   /**
+   * Returns the {@link Invokable} for {@code method}, which must be a member of {@code T}.
+   *
+   * @since 14.0
+   */
+  public final Invokable<T, Object> method(Method method) {
+    checkArgument(of(method.getDeclaringClass()).isAssignableFrom(this),
+        "%s not declared by %s", method, this);
+    return new Invokable.MethodInvokable<T>(method) {
+      @Override Type getGenericReturnType() {
+        return resolveType(super.getGenericReturnType()).getType();
+      }
+      @Override Type[] getGenericParameterTypes() {
+        return resolveInPlace(super.getGenericParameterTypes());
+      }
+      @Override Type[] getGenericExceptionTypes() {
+        return resolveInPlace(super.getGenericExceptionTypes());
+      }
+      @Override public TypeToken<T> getOwnerType() {
+        return TypeToken.this;
+      }
+    };
+  }
+
+  /**
+   * Returns the {@link Invokable} for {@code constructor}, which must be a member of {@code T}.
+   *
+   * @since 14.0
+   */
+  public final Invokable<T, T> constructor(Constructor<?> constructor) {
+    checkArgument(constructor.getDeclaringClass() == getRawType(),
+        "%s not declared by %s", constructor, getRawType());
+    return new Invokable.ConstructorInvokable<T>(constructor) {
+      @Override Type getGenericReturnType() {
+        return resolveType(super.getGenericReturnType()).getType();
+      }
+      @Override Type[] getGenericParameterTypes() {
+        return resolveInPlace(super.getGenericParameterTypes());
+      }
+      @Override Type[] getGenericExceptionTypes() {
+        return resolveInPlace(super.getGenericExceptionTypes());
+      }
+      @Override public TypeToken<T> getOwnerType() {
+        return TypeToken.this;
+      }
+    };
+  }
+
+  /**
    * The set of interfaces and classes that {@code T} is or is a subtype of. {@link Object} is not
    * included in the set if this type is an interface.
    */
@@ -476,7 +533,7 @@ public abstract class TypeToken<T> extends TypeCapture<T> implements Serializabl
             TypeCollector.FOR_GENERIC_TYPE.collectTypes(TypeToken.this);
         return (types = FluentIterable.from(collectedTypes)
                 .filter(TypeFilter.IGNORE_TYPE_VARIABLE_OR_WILDCARD)
-                .toImmutableSet());
+                .toSet());
       } else {
         return filteredTypes;
       }
@@ -508,7 +565,7 @@ public abstract class TypeToken<T> extends TypeCapture<T> implements Serializabl
       if (result == null) {
         return (interfaces = FluentIterable.from(allTypes)
             .filter(TypeFilter.INTERFACE_ONLY)
-            .toImmutableSet());
+            .toSet());
       } else {
         return result;
       }
@@ -529,7 +586,7 @@ public abstract class TypeToken<T> extends TypeCapture<T> implements Serializabl
               return type.isInterface();
             }
           })
-          .toImmutableSet();
+          .toSet();
     }
 
     @Override public TypeSet classes() {
@@ -555,7 +612,7 @@ public abstract class TypeToken<T> extends TypeCapture<T> implements Serializabl
             TypeCollector.FOR_GENERIC_TYPE.classesOnly().collectTypes(TypeToken.this);
         return (classes = FluentIterable.from(collectedTypes)
             .filter(TypeFilter.IGNORE_TYPE_VARIABLE_OR_WILDCARD)
-            .toImmutableSet());
+            .toSet());
       } else {
         return result;
       }
@@ -815,7 +872,7 @@ public abstract class TypeToken<T> extends TypeCapture<T> implements Serializabl
       return ImmutableSet.<Class<?>>of((Class<?>) type);
     } else if (type instanceof ParameterizedType) {
       ParameterizedType parameterizedType = (ParameterizedType) type;
-      // JDK implementation declares getRawType() to return Class<?>
+      // JDK implementation declares getRawType() to return Class<?>: http://goo.gl/YzaEd
       return ImmutableSet.<Class<?>>of((Class<?>) parameterizedType.getRawType());
     } else if (type instanceof GenericArrayType) {
       GenericArrayType genericArrayType = (GenericArrayType) type;
@@ -1042,8 +1099,11 @@ public abstract class TypeToken<T> extends TypeCapture<T> implements Serializabl
       if (superclass != null) {
         aboveMe = Math.max(aboveMe, collectTypes(superclass, map));
       }
-      // TODO(benyu): should we include Object for interface?
-      // Also, CharSequence[] and Object[] for String[]?
+      /*
+       * TODO(benyu): should we include Object for interface?
+       * Also, CharSequence[] and Object[] for String[]?
+       *
+       */
       map.put(type, aboveMe + 1);
       return aboveMe + 1;
     }
